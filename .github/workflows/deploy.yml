@@ -1,0 +1,203 @@
+name: Deploy Multi-VM Infrastructure
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'terraform/**'
+      - 'scripts/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+env:
+  TERRAFORM_VERSION: '1.6.0'
+  WORKING_DIRECTORY: './terraform'
+
+jobs:
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    outputs:
+      plan_exitcode: ${{ steps.plan.outputs.exitcode }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Terraform Format Check
+        id: fmt
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Terraform Init
+        id: init
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: terraform init
+
+      - name: Terraform Validate
+        id: validate
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          terraform plan -no-color -detailed-exitcode -out=tfplan || echo "exitcode=$?" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ env.WORKING_DIRECTORY }}/tfplan
+          retention-days: 5
+
+  terraform-apply:
+    name: Terraform Apply
+    needs: terraform-plan
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Terraform Init
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: terraform init
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Terraform Apply
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: terraform apply -auto-approve tfplan
+
+      - name: Get Outputs
+        id: outputs
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          echo "web_server_url=$(terraform output -raw web_server_url)" >> $GITHUB_OUTPUT
+          echo "api_health_endpoint=$(terraform output -raw api_health_endpoint)" >> $GITHUB_OUTPUT
+          echo "api_db_status_endpoint=$(terraform output -raw api_db_status_endpoint)" >> $GITHUB_OUTPUT
+
+      - name: Wait for Services to Initialize
+        run: |
+          echo "Waiting for services to start..."
+          echo "Database tier initialization takes ~60 seconds..."
+          echo "Web tier initialization takes ~90 seconds..."
+          sleep 120
+
+      - name: Test Health Endpoint
+        run: |
+          echo "Testing health endpoint..."
+          MAX_RETRIES=5
+          RETRY_COUNT=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if curl -f -s "${{ steps.outputs.outputs.api_health_endpoint }}"; then
+              echo "✅ Health check passed!"
+              break
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              echo "Retry $RETRY_COUNT/$MAX_RETRIES..."
+              sleep 10
+            fi
+          done
+
+      - name: Test Database Connectivity
+        run: |
+          echo "Testing database connectivity..."
+          MAX_RETRIES=10
+          RETRY_COUNT=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            RESPONSE=$(curl -s "${{ steps.outputs.outputs.api_db_status_endpoint }}")
+            if echo "$RESPONSE" | grep -q '"connected":true'; then
+              echo "✅ Database connection successful!"
+              echo "$RESPONSE" | jq .
+              break
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              echo "Retry $RETRY_COUNT/$MAX_RETRIES..."
+              sleep 15
+            fi
+          done
+
+      - name: Test Users API
+        run: |
+          echo "Testing users API..."
+          curl -f -s "${{ steps.outputs.outputs.web_server_url }}/api/users" | jq .
+
+      - name: Create Deployment Summary
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## 🚀 Multi-VM Deployment Successful
+
+          ### Instance Details
+          - **Web Server URL**: ${{ steps.outputs.outputs.web_server_url }}
+          - **Health Check**: ${{ steps.outputs.outputs.api_health_endpoint }}
+          - **DB Status**: ${{ steps.outputs.outputs.api_db_status_endpoint }}
+
+          ### Architecture
+          \`\`\`
+          Internet → Web Tier (Node.js + Nginx) → Database Tier (PostgreSQL)
+          \`\`\`
+
+          ### Quick Test Commands
+          \`\`\`bash
+          # Health check
+          curl ${{ steps.outputs.outputs.api_health_endpoint }}
+
+          # Database status
+          curl ${{ steps.outputs.outputs.api_db_status_endpoint }}
+
+          # List users
+          curl ${{ steps.outputs.outputs.web_server_url }}/api/users
+
+          # Create user
+          curl -X POST ${{ steps.outputs.outputs.web_server_url }}/api/users \\
+            -H "Content-Type: application/json" \\
+            -d '{"name":"Test User","email":"test@example.com"}'
+          \`\`\`
+
+          ### Next Steps
+          1. 🌐 Visit ${{ steps.outputs.outputs.web_server_url }} in your browser
+          2. 📊 Monitor instances in GCP Console
+          3. 📝 Check logs in Cloud Logging
+          4. 🧪 Test CRUD operations via API
+          EOF

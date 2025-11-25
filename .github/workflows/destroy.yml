@@ -1,0 +1,119 @@
+name: Destroy Multi-VM Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "destroy" to confirm infrastructure destruction'
+        required: true
+        type: string
+
+env:
+  TERRAFORM_VERSION: '1.6.0'
+  WORKING_DIRECTORY: './terraform'
+
+jobs:
+  validate-confirmation:
+    name: Validate Destruction Confirmation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "destroy" ]; then
+            echo "❌ Confirmation failed. You must type 'destroy' to proceed."
+            exit 1
+          fi
+          echo "✅ Confirmation validated"
+
+  terraform-destroy:
+    name: Terraform Destroy
+    needs: validate-confirmation
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Terraform Init
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: terraform init
+
+      - name: Terraform Plan Destroy
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: terraform plan -destroy -no-color
+
+      - name: Terraform Destroy
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: terraform destroy -auto-approve
+
+      - name: Create Destruction Summary
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## 🗑️ Multi-VM Infrastructure Destroyed
+
+          ### Resources Removed
+          - ✅ Web Tier VM Instance (Node.js + Nginx)
+          - ✅ Database Tier VM Instance (PostgreSQL)
+          - ✅ Firewall Rules (HTTP, PostgreSQL, Internal)
+          - ✅ Service Accounts (Web Tier + Database Tier)
+          - ✅ IAM Bindings
+          - ✅ External IP Address
+
+          ### Data Impact
+          ⚠️ **All data has been permanently deleted:**
+          - PostgreSQL database contents
+          - Application logs
+          - VM configurations
+
+          ### Cost Impact
+          All resources associated with this project have been deleted.
+          No further charges will be incurred for:
+          - Compute Engine VMs (2x e2-micro)
+          - External IP address
+          - Network egress
+
+          ### Verification Steps
+          \`\`\`bash
+          # Verify VMs are deleted
+          gcloud compute instances list --filter="labels.application=multi-vm-stack"
+
+          # Verify firewall rules are deleted
+          gcloud compute firewall-rules list --filter="name~(web-tier|db-tier)"
+
+          # Verify service accounts are deleted
+          gcloud iam service-accounts list --filter="displayName~(Web Tier|Database Tier)"
+          \`\`\`
+
+          ### Next Steps
+          - 🔍 Verify destruction in GCP Console
+          - 📊 Check for any orphaned resources
+          - 📝 Review Cloud Logging for destruction logs
+          - 🔄 Redeploy by pushing to main branch if needed
+          EOF
+
+      - name: Notify Destruction
+        run: |
+          echo "================================================"
+          echo "🗑️  Multi-VM Infrastructure Destruction Complete"
+          echo "================================================"
+          echo "Destroyed resources:"
+          echo "  - 2x VM Instances (web-server, db-server)"
+          echo "  - 3x Firewall Rules"
+          echo "  - 2x Service Accounts"
+          echo "  - 1x External IP"
+          echo "================================================"
