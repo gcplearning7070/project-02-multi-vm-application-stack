@@ -117,51 +117,27 @@ jobs:
 
       - name: Wait for Services to Initialize
         run: |
-          echo "Waiting for services to start..."
-          echo "Database tier initialization takes ~60 seconds..."
-          echo "Web tier initialization takes ~90 seconds..."
-          sleep 120
+          echo "⏳ Waiting for services to start..."
+          echo "  - PostgreSQL installation and configuration: ~60-90 seconds"
+          echo "  - Node.js installation and npm packages: ~60-90 seconds"
+          echo "  - Application startup and database connectivity: ~30 seconds"
+          echo "Total estimated time: 3-5 minutes"
+          echo ""
+          echo "Waiting 3 minutes before starting tests..."
+          sleep 180
 
-      - name: Test Health Endpoint
+      - name: Run Comprehensive Deployment Tests
         run: |
-          echo "Testing health endpoint..."
-          MAX_RETRIES=5
-          RETRY_COUNT=0
+          chmod +x ./tests/verify_deployment.sh
+          WEB_IP=$(terraform -chdir=./terraform output -raw web_server_external_ip 2>/dev/null || echo "")
           
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            if curl -f -s "${{ steps.outputs.outputs.api_health_endpoint }}"; then
-              echo "✅ Health check passed!"
-              break
-            else
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-              echo "Retry $RETRY_COUNT/$MAX_RETRIES..."
-              sleep 10
-            fi
-          done
-
-      - name: Test Database Connectivity
-        run: |
-          echo "Testing database connectivity..."
-          MAX_RETRIES=10
-          RETRY_COUNT=0
+          if [ -z "$WEB_IP" ]; then
+            echo "❌ Could not get web server IP from Terraform output"
+            exit 1
+          fi
           
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            RESPONSE=$(curl -s "${{ steps.outputs.outputs.api_db_status_endpoint }}")
-            if echo "$RESPONSE" | grep -q '"connected":true'; then
-              echo "✅ Database connection successful!"
-              echo "$RESPONSE" | jq .
-              break
-            else
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-              echo "Retry $RETRY_COUNT/$MAX_RETRIES..."
-              sleep 15
-            fi
-          done
-
-      - name: Test Users API
-        run: |
-          echo "Testing users API..."
-          curl -f -s "${{ steps.outputs.outputs.web_server_url }}/api/users" | jq .
+          echo "Running deployment verification tests..."
+          ./tests/verify_deployment.sh "$WEB_IP"
 
       - name: Create Deployment Summary
         run: |

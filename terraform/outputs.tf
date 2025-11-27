@@ -8,6 +8,11 @@ output "web_server_ip" {
   value       = google_compute_instance.web_server.network_interface[0].access_config[0].nat_ip
 }
 
+output "web_server_external_ip" {
+  description = "External IP address of the web server (alias)"
+  value       = google_compute_instance.web_server.network_interface[0].access_config[0].nat_ip
+}
+
 output "web_server_internal_ip" {
   description = "Internal IP address of the web server"
   value       = google_compute_instance.web_server.network_interface[0].network_ip
