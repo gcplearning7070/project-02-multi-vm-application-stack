@@ -53,8 +53,6 @@ resource "google_compute_instance" "db_server" {
   tags   = ["db-tier"]
   labels = var.labels
 
-  depends_on = [google_project_service.compute]
-
   boot_disk {
     initialize_params {
       image = "${var.image_project}/${var.image_family}"
@@ -91,6 +89,7 @@ resource "google_compute_instance" "db_server" {
   allow_stopping_for_update = true
 
   depends_on = [
+    google_project_service.compute,
     google_service_account.db_tier_sa,
     google_project_iam_member.db_tier_logging,
     google_project_iam_member.db_tier_monitoring
@@ -105,8 +104,6 @@ resource "google_compute_instance" "web_server" {
 
   tags   = ["web-tier", "http-server"]
   labels = var.labels
-
-  depends_on = [google_project_service.compute]
 
   boot_disk {
     initialize_params {
@@ -151,6 +148,7 @@ resource "google_compute_instance" "web_server" {
   allow_stopping_for_update = true
 
   depends_on = [
+    google_project_service.compute,
     google_compute_instance.db_server,
     google_service_account.web_tier_sa,
     google_project_iam_member.web_tier_logging,
