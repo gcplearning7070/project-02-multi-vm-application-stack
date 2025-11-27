@@ -1,7 +1,7 @@
 # Copy this file to terraform.tfvars and update with your values
 # terraform.tfvars is gitignored for security
 
-project_id   = "your-gcp-project-id"
+project_id   = "gcp-terraform-demo-474514"
 region       = "us-central1"
 zone         = "us-central1-a"
 
