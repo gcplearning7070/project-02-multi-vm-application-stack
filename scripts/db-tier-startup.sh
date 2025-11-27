@@ -3,10 +3,11 @@
 # Database Tier Startup Script
 # 
 # This script configures PostgreSQL database server:
-# 1. Install PostgreSQL 15
-# 2. Configure for network access from web tier
-# 3. Create database and user
-# 4. Initialize schema
+# 1. Wait for internet connectivity (via Cloud NAT)
+# 2. Install PostgreSQL 15
+# 3. Configure for network access from web tier
+# 4. Create database and user
+# 5. Initialize schema
 ###############################################################################
 
 set -e
@@ -17,6 +18,24 @@ log() {
 }
 
 log "Starting database tier setup..."
+
+# Wait for internet connectivity (Cloud NAT propagation)
+log "Waiting for internet connectivity via Cloud NAT..."
+MAX_WAIT=60
+COUNT=0
+while [ $COUNT -lt $MAX_WAIT ]; do
+    if ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
+        log "✅ Internet connectivity established"
+        break
+    fi
+    COUNT=$((COUNT + 1))
+    sleep 2
+done
+
+if ! ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
+    log "❌ No internet connectivity after ${MAX_WAIT} attempts. Cloud NAT may not be configured."
+    log "Attempting to continue anyway..."
+fi
 
 # Get metadata
 DB_NAME=$(curl -s http://metadata.google.internal/computeMetadata/v1/instance/attributes/db-name -H "Metadata-Flavor: Google")
