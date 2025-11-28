@@ -36,10 +36,11 @@ A beginner-friendly GCP project that deploys a two-tier application architecture
 │  │   PostgreSQL Database Server              │     │
 │  │   - Port 5432                             │     │
 │  │   - Private Network Only                  │     │
-│  │   - Automated Backups                     │     │
+│  │   - Cloud NAT for Internet Access         │     │
 │  └───────────────────────────────────────────┘     │
 │                                                     │
 │  - Internal IP Only (No External IP)                │
+│  - Cloud NAT for Package Installation               │
 │  - Custom Service Account                           │
 └─────────────────────────────────────────────────────┘
 ```
@@ -49,6 +50,7 @@ A beginner-friendly GCP project that deploys a two-tier application architecture
 - Deploy multi-tier application architecture
 - Configure internal networking between VMs
 - Implement security best practices (private DB tier)
+- Configure Cloud NAT for private VM internet access
 - Use separate service accounts per tier
 - Manage firewall rules for different tiers
 - Work with VM metadata for configuration
@@ -72,8 +74,9 @@ A beginner-friendly GCP project that deploys a two-tier application architecture
 - **Web Tier**: Node.js + Express.js + Nginx
 - **Database Tier**: PostgreSQL 15
 - **Compute**: 2x GCE VMs (e2-micro)
-- **Networking**: VPC internal networking, firewall rules
+- **Networking**: VPC internal networking, Cloud NAT, Cloud Router, firewall rules
 - **IAM**: 2 Custom Service Accounts (one per tier)
+- **State Management**: GCS backend (remote state)
 
 ## 🚀 Quick Start
 
@@ -120,11 +123,14 @@ project-02-multi-vm-application-stack/
 │       ├── deploy.yml         # Automated deployment
 │       └── destroy.yml        # Safe destruction
 ├── terraform/
+│   ├── backend.tf             # GCS remote state configuration
+│   ├── apis.tf                # Enable required GCP APIs
 │   ├── main.tf                # Provider configuration
 │   ├── variables.tf           # Input variables
 │   ├── terraform.tfvars       # Variable values (gitignored)
-│   ├── resources.tf           # All GCP resources
+│   ├── resources.tf           # VM instances and service accounts
 │   ├── network.tf             # Firewall rules
+│   ├── nat.tf                 # Cloud NAT and Cloud Router
 │   └── outputs.tf             # Output values
 ├── scripts/
 │   ├── web-tier-startup.sh    # Web server initialization
@@ -132,8 +138,10 @@ project-02-multi-vm-application-stack/
 │   └── app/                   # Node.js application code
 │       ├── server.js          # Express.js server
 │       └── package.json       # NPM dependencies
+├── docs/
+│   └── OPERATIONS.md          # Operations and troubleshooting guide
 ├── tests/
-│   └── test_deployment.sh     # Multi-tier testing
+│   └── verify_deployment.sh   # Automated deployment verification
 ├── README.md
 └── .gitignore
 ```
@@ -156,7 +164,15 @@ project-02-multi-vm-application-stack/
 **Firewall Rules:**
 1. **Web Tier**: Allow HTTP (80) from Internet (0.0.0.0/0)
 2. **Database Tier**: Allow PostgreSQL (5432) only from Web Tier
-3. **SSH**: Disabled by default (use IAP tunnel if needed)
+3. **Internal Communication**: Allow all internal traffic between tiers
+4. **SSH**: Disabled by default (use IAP tunnel if needed)
+
+**Cloud NAT Configuration:**
+- Database VM has no external IP for security
+- Cloud NAT + Cloud Router provides controlled internet access
+- Enables package installation (PostgreSQL) from private VM
+- NAT gateway with automatic IP allocation
+- Endpoint-independent mapping for better connectivity
 
 **Key Security Features:**
 - Database has no external IP
@@ -164,6 +180,7 @@ project-02-multi-vm-application-stack/
 - Separate service accounts per tier
 - Principle of least privilege applied
 - No default Compute Engine service accounts
+- Cloud NAT enables outbound-only internet access
 
 ## 🧪 Testing
 
@@ -197,8 +214,13 @@ curl $WEB_URL/api/users/1
 ### Automated Testing
 ```bash
 cd tests
-chmod +x test_deployment.sh
-./test_deployment.sh
+chmod +x verify_deployment.sh
+
+# Get web server IP from Terraform
+WEB_IP=$(terraform -chdir=../terraform output -raw web_server_external_ip)
+
+# Run verification (waits up to 10 minutes for deployment)
+./verify_deployment.sh $WEB_IP
 ```
 
 ### Database Access (via Web Tier)
@@ -281,46 +303,35 @@ The deployed Node.js application provides:
 
 ## 🐛 Troubleshooting
 
-### Web tier can't connect to database
-```bash
-# Check firewall rules
-gcloud compute firewall-rules list --filter="name:db-tier"
+For comprehensive troubleshooting, operations guides, and testing procedures, see **[docs/OPERATIONS.md](docs/OPERATIONS.md)**.
 
-# Verify database is running
+### Quick Tips
+
+**Wait for Startup**: Allow 5-7 minutes after deployment for both VMs to complete initialization.
+
+**Check Application Status:**
+```bash
+# SSH into web server
+gcloud compute ssh web-server --zone=us-central1-a
+sudo systemctl status webapp
+sudo journalctl -u webapp -n 50
+```
+
+**Check Database Status:**
+```bash
+# SSH into database server
 gcloud compute ssh db-server --zone=us-central1-a
 sudo systemctl status postgresql
-
-# Check PostgreSQL logs
-sudo tail -f /var/log/postgresql/postgresql-15-main.log
-
-# Test connectivity from web tier
-gcloud compute ssh web-server --zone=us-central1-a
-nc -zv <DB_INTERNAL_IP> 5432
 ```
 
-### Application not responding
+**View Serial Console Logs:**
 ```bash
-# SSH to web tier
-gcloud compute ssh web-server --zone=us-central1-a
-
-# Check Node.js application
-sudo systemctl status webapp
-sudo journalctl -u webapp -f
-
-# Check Nginx
-sudo systemctl status nginx
-sudo tail -f /var/log/nginx/error.log
+# Check startup script progress
+gcloud compute instances get-serial-port-output web-server --zone=us-central1-a | tail -100
+gcloud compute instances get-serial-port-output db-server --zone=us-central1-a | tail -100
 ```
 
-### Database connection errors
-```bash
-# Verify PostgreSQL configuration
-sudo cat /etc/postgresql/15/main/postgresql.conf | grep listen
-sudo cat /etc/postgresql/15/main/pg_hba.conf
-
-# Restart PostgreSQL
-sudo systemctl restart postgresql
-```
+For detailed troubleshooting steps, common issues, and solutions, see the **[Operations Guide](docs/OPERATIONS.md)**.
 
 ## 📊 Monitoring
 
